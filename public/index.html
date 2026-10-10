@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f7f8fc" />
+    <title>课夹 · 学校文件归档</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/extras.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="/" aria-label="课夹首页">
+          <span class="brand-mark"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M8 12.5A3.5 3.5 0 0 1 11.5 9h6.2l3.1 3.2h7.7a3.5 3.5 0 0 1 3.5 3.5v12.8a3.5 3.5 0 0 1-3.5 3.5h-17A3.5 3.5 0 0 1 8 28.5z"/><path d="M8.3 17.4h23.4"/></svg></span>
+          <span class="brand-copy"><strong>课夹</strong><small>个人学习资料库</small></span>
+        </a>
+
+        <button class="primary-button sidebar-upload" id="sidebarUpload"><span class="plus">＋</span> 投递文件</button>
+
+        <section class="library-section" aria-label="文件夹资料库">
+          <div class="library-heading"><span class="nav-section-label">资料库</span><button id="addColumnButton" type="button" title="新增栏目，同时创建文件夹" aria-label="新增栏目">＋</button></div>
+          <nav class="main-nav" aria-label="资料库导航">
+            <button class="nav-item active" id="diskNav" data-view="disk" title="查看所选硬盘或目录"><span class="nav-icon drive-icon">▣</span><span>硬盘总览</span></button>
+            <div id="folderNav"></div>
+          </nav>
+        </section>
+
+        <div class="sidebar-divider"></div>
+        <div class="nav-section-label">快速访问</div>
+        <button class="nav-item" id="archiveNav" data-category="all"><span class="nav-icon icon-all">▦</span><span>归档记录</span><span class="nav-count" id="allCount">0</span></button>
+        <button class="nav-item" id="openRoot"><span class="nav-icon drive-icon">↗</span><span>移动硬盘目录</span><span class="external-mark">↗</span></button>
+        <a class="nav-item cloud-link" href="https://pan.baidu.com/" target="_blank" rel="noopener noreferrer" id="baiduLink"><span class="nav-icon cloud-icon">☁</span><span>百度网盘</span><span class="external-mark">↗</span></a>
+        <div class="sidebar-spacer"></div>
+        <div class="storage-card">
+          <div class="storage-top"><span class="storage-dot"></span><span>移动硬盘</span><span class="storage-state" id="sidebarConnection">未设置</span></div>
+          <p id="storageHint">设置归档目录后开始整理文件</p>
+          <button id="connectSidebar" class="text-button">设置目录 <span>→</span></button>
+        </div>
+        <div class="profile-row"><span class="profile-avatar">学</span><span class="profile-copy"><strong>我的资料</strong><small>仅本机使用</small></span><span class="profile-menu">•••</span></div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="breadcrumbs"><span>资料库</span><span class="crumb-sep">/</span><strong id="currentSection">全部文件</strong></div>
+          <div class="top-actions">
+            <label class="search-box"><span class="search-symbol">⌕</span><input type="search" id="searchInput" placeholder="搜索文件名或路径…" autocomplete="off" /><kbd id="searchShortcut">Ctrl K</kbd></label>
+            <button class="round-icon" id="helpButton" aria-label="帮助" title="使用帮助">?</button>
+            <button class="connection-pill" id="connectTop"><span class="status-light"></span><span id="connectionText">设置硬盘目录</span><span class="pill-chevron">⌄</span></button>
+          </div>
+        </header>
+
+        <div class="page-content">
+          <section class="welcome-row">
+            <div>
+              <div class="eyebrow"><span class="eyebrow-line"></span> YOUR STUDY, IN ORDER</div>
+              <h1 id="welcomeTitle">文件有序，学习轻松。</h1>
+              <p id="welcomeDescription">选择要整理的资料，课夹会复制到你选中的文件夹。</p>
+            </div>
+            <div class="date-chip"><span class="calendar-mini">▦</span><span id="todayLabel">今天</span><span class="date-divider"></span><strong id="clockLabel">—</strong></div>
+          </section>
+
+          <section class="connection-banner" id="connectionBanner" aria-live="polite">
+            <span class="banner-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 18.2h10.2a4 4 0 0 0 .3-8 5.6 5.6 0 0 0-10.8-1.1 4.6 4.6 0 0 0 .3 9.1Z"/><path d="M12 11.8v7m-2.5-2.5L12 19l2.5-2.7"/></svg></span>
+            <div class="banner-copy"><strong id="bannerTitle">先设置移动硬盘归档目录</strong><span id="bannerMessage">把资料复制到硬盘后，会按类别放进独立文件夹。</span></div>
+            <button class="banner-action" id="bannerConnect">设置目录 <span>→</span></button>
+            <button class="banner-close" id="bannerClose" aria-label="收起提示">×</button>
+          </section>
+
+          <div id="archiveView">
+          <section class="stats-grid" aria-label="文件概览">
+            <article class="stat-card"><div class="stat-top"><span class="stat-label">文件总数</span><span class="stat-icon files-stat">▧</span></div><div class="stat-value" id="statFiles">0<span class="stat-unit"> 个文件</span></div><div class="stat-foot"><span class="stat-note">已整理到移动硬盘</span></div></article>
+            <article class="stat-card"><div class="stat-top"><span class="stat-label">占用空间</span><span class="stat-icon space-stat">◌</span></div><div class="stat-value" id="statSize">0<span class="stat-unit"> B</span></div><div class="stat-foot"><span class="stat-note">源文件保留，归档为副本</span></div></article>
+            <article class="stat-card"><div class="stat-top"><span class="stat-label">资料库栏目</span><span class="stat-icon category-stat">◫</span></div><div class="stat-value" id="statCategories">0<span class="stat-unit"> 个栏目</span></div><div class="stat-foot"><span class="stat-note">来自所选硬盘的实际文件夹</span></div></article>
+          </section>
+
+          <section class="folders-section">
+            <div class="section-heading"><div><h2>资料库文件夹</h2><p>选择文件夹，打开目录并投递资料</p></div><button class="subtle-button" id="openAllFolders">打开归档目录 <span>↗</span></button></div>
+            <div class="folder-grid" id="folderGrid"></div>
+          </section>
+
+          <section class="files-section">
+            <div class="section-heading files-heading"><div><h2 id="filesHeading">最近整理</h2><p id="filesSubheading">刚整理好的文件都在这里</p></div><div class="list-tools"><button class="subtle-button scan-button" id="scanButton" type="button">扫描归档目录</button><select id="sortSelect" aria-label="排序文件"><option value="newest">最近整理</option><option value="name">文件名称</option><option value="size">文件大小</option></select><button class="view-toggle selected" aria-label="列表视图">☰</button></div></div>
+            <div class="file-list" id="fileList"></div>
+          </section>
+          </div>
+          <section class="disk-browser" id="diskView" hidden aria-label="硬盘文件浏览器">
+            <div class="disk-toolbar"><div><h2>硬盘文件</h2><p id="diskRootLabel">选择要查看的硬盘或文件夹</p></div><div class="disk-toolbar-actions"><button class="subtle-button" id="chooseBrowseButton" type="button">选择浏览位置</button><button class="subtle-button" id="browseArchiveButton" type="button" hidden>查看归档目录</button><button class="subtle-button" id="diskRefresh" type="button">刷新</button><button class="primary-button" id="newFolderButton" type="button">＋ 新建文件夹</button></div></div>
+            <nav class="disk-breadcrumbs" id="diskBreadcrumbs" aria-label="硬盘文件夹路径"></nav>
+          <section class="upload-panel" id="uploadPanel">
+            <div class="upload-heading"><div><h2>投递到当前文件夹</h2><p id="deliveryTarget">先从左侧选择文件夹栏目</p></div><span class="upload-badge"><span class="sparkle">✦</span> 选定文件夹</span></div>
+            <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="选择或拖入文件投递">
+              <input type="file" id="fileInput" multiple hidden />
+              <input type="file" id="folderInput" webkitdirectory directory multiple hidden />
+              <span class="drop-illustration"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M13 33h22a7 7 0 0 0 .6-14A11 11 0 0 0 14.4 17 8 8 0 0 0 13 33Z"/><path d="M24 31V19m-4.5 4.7L24 19l4.5 4.7"/></svg></span>
+              <strong>拖拽文件到这里</strong><span class="drop-subtext">支持 PDF、Word、PPT、图片、压缩包等常见格式</span>
+              <div class="drop-actions"><button class="choose-button" id="chooseFiles" type="button">选择文件</button><button class="folder-button" id="chooseFolder" type="button">导入文件夹</button></div>
+              <span class="drop-footnote"><span class="lock-symbol">♢</span> 文件会复制到当前选中的文件夹，原件会保留</span>
+            </div>
+            <div class="upload-queue" id="uploadQueue" hidden></div>
+          </section>
+
+            <div class="disk-list" id="diskList" aria-live="polite"></div>
+            <p class="disk-note">左侧栏目来自所选目录中的文件夹；选择栏目后可向对应文件夹投递文件。新增栏目会创建同名文件夹。</p>
+          </section>
+          <footer class="page-footer"><span>课夹 <span class="footer-dot">·</span> 为学习资料留一份秩序</span><span><span class="privacy-icon">◇</span> 文件保存在你的移动硬盘</span></footer>
+        </div>
+      </main>
+    </div>
+
+    <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+    <dialog class="path-dialog" id="nameDialog" aria-labelledby="nameDialogTitle"><form id="nameForm"><button class="dialog-close" type="button" id="nameDialogClose" aria-label="关闭">×</button><div class="dialog-icon">✎</div><h2 id="nameDialogTitle">新建文件夹</h2><p class="path-intro" id="nameContext"></p><label class="path-label" for="entryNameInput">名称</label><input id="entryNameInput" autocomplete="off" maxlength="255" required /><small class="path-hint" id="nameHint"></small><div class="path-error" id="nameError" hidden></div><div class="path-dialog-actions"><button class="subtle-button" type="button" id="nameCancel">取消</button><button class="dialog-primary" type="submit" id="saveEntryName">保存</button></div></form></dialog>
+    <dialog class="help-dialog" id="helpDialog"><form method="dialog"><button class="dialog-close" aria-label="关闭">×</button><div class="dialog-icon">?</div><h2>课夹怎么使用</h2><ol><li>点“选择浏览位置”，在 Windows 系统窗口中选择移动硬盘或目录。</li><li>左侧资料库自动显示所选目录中的文件夹，鼠标滚轮可以滚动栏目。</li><li>选择左侧文件夹栏目，投递文件后点“开始投递”；资料库旁的“＋”可新增栏目并创建同名文件夹。</li><li>点“定位”在文件资源管理器显示文件；侧栏“百度网盘”可打开网盘网页。</li></ol><p class="dialog-note">硬盘拔下后，归档索引仍保留；浏览、修改或整理文件需要重新连接。百度网盘入口打开网页，备份文件需在网盘中上传。</p><button class="dialog-primary">知道了</button></form></dialog>
+  </body>
+</html>
