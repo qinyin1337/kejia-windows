@@ -1,3 +1,5 @@
+import { matchFilename } from "./filename-classifier.js";
+
 const CATEGORY_NAMES = {
   courses: "课程资料",
   assignments: "作业报告",
@@ -14,6 +16,9 @@ const state = {
   sort: "newest",
   page: 0,
   pending: [],
+  queuePage: 0,
+  autoClassify: true,
+  matching: false,
   uploadRunning: false,
   scanRunning: false,
   view: "disk",
@@ -94,7 +99,7 @@ function updateConnection() {
   }
   $("#connectSidebar").innerHTML = connected ? "管理目录 <span>→</span>" : "设置目录 <span>→</span>";
   $("#connectTop").title = connected ? `归档目录：${state.status.drivePath}` : label;
-  for (const id of ["connectTop", "connectSidebar", "bannerConnect"]) $(`#${id}`).disabled = state.pickingDirectory || state.pickingBrowse;
+  for (const id of ["connectTop", "connectSidebar", "bannerConnect"]) $(`#${id}`).disabled = state.pickingDirectory || state.pickingBrowse || state.matching;
 }
 
 function updateStats() {
@@ -109,7 +114,7 @@ function updateStats() {
 function renderLibrary() {
   const nav = $("#folderNav");
   const scrollTop = $(".main-nav").scrollTop;
-  $("#addColumnButton").disabled = !state.status.browser?.connected || state.pickingDirectory || state.pickingBrowse;
+  $("#addColumnButton").disabled = !state.status.browser?.connected || state.pickingDirectory || state.pickingBrowse || state.matching;
   if (!state.status.browser?.connected) {
     nav.innerHTML = '<div class="library-empty">选择硬盘或目录后，自动识别文件夹栏目。<button type="button" data-library-pick>选择硬盘</button></div>';
   } else if (state.library.error) {
@@ -394,47 +399,111 @@ function updateDeliveryTarget() {
   const ready = state.status.browser?.connected && !state.disk.loading && !state.disk.error && !state.pickingBrowse && !state.pickingDirectory;
   const separator = state.status.platform === "win32" ? "\\" : "/";
   const root = (state.status.browseRoot || "").replace(/[\\/]$/, "");
-  $("#deliveryTarget").textContent = ready ? `投递到：${root}${separator}${state.disk.path.split("/").join(separator)}` : "先选择硬盘，再从左侧选择文件夹栏目";
-  for (const id of ["chooseFiles", "chooseFolder", "sidebarUpload"]) $(`#${id}`).disabled = !ready || state.uploadRunning;
+  $("#deliveryTarget").textContent = ready ? state.autoClassify ? "按文件名匹配左侧资料库栏目，确认去向后开始投递" : `投递到：${root}${separator}${state.disk.path.split("/").join(separator)}` : "先选择硬盘或目录";
+  $("#autoClassify").disabled = state.uploadRunning || state.matching;
+  $("#rematchFiles").disabled = !ready || state.uploadRunning || state.matching || !state.pending.length;
+  $("#rematchFiles").textContent = state.matching ? "正在匹配…" : "重新自动匹配";
+  for (const id of ["chooseFiles", "chooseFolder", "sidebarUpload"]) $(`#${id}`).disabled = !ready || state.uploadRunning || state.matching;
   $("#dropzone").classList.toggle("unavailable", !ready);
   $("#dropzone").setAttribute("aria-disabled", String(!ready));
 }
 
 function folderOptions(item) {
-  if (item.browseRoot !== state.status.browseRoot) return `<option value="${escapeHTML(item.directory)}">原浏览位置 / ${escapeHTML(item.directory || "根目录")}</option>`;
+  if (item.browseRoot !== state.status.browseRoot) return `<option>原浏览位置 / ${escapeHTML(item.directory ?? "待选择")}</option>`;
   const choices = new Map([["", "当前硬盘或目录的根目录"], ...state.library.folders.map((folder) => [folder.relativePath, folder.name])]);
-  if (!choices.has(item.directory)) choices.set(item.directory, item.directory);
-  return [...choices].map(([value, label]) => `<option value="${escapeHTML(value)}" ${value === item.directory ? "selected" : ""}>${escapeHTML(label)}</option>`).join("");
+  if (!choices.has(item.defaultDirectory)) choices.set(item.defaultDirectory, item.defaultDirectory);
+  if (item.directory !== null && !choices.has(item.directory)) choices.set(item.directory, item.directory);
+  return `<option value="" disabled ${item.directory === null ? "selected" : ""}>请选择目标文件夹</option>` + [...choices].map(([value, label]) => `<option value="${escapeHTML(value)}" ${value === item.directory ? "selected" : ""}>${escapeHTML(label)}</option>`).join("");
 }
 
-function addFiles(fileList, directory = state.disk.path) {
+function classifyItem(item) {
+  if (state.library.error) {
+    item.directory = null;
+    item.matchReason = "无法读取资料库，请刷新后重新匹配或手动选择目标";
+    item.matchKind = "unmatched";
+    return;
+  }
+  const match = matchFilename(item.file.name, state.library.folders);
+  item.directory = match.directory;
+  item.matchReason = match.reason;
+  item.matchKind = match.kind;
+}
+
+async function addFiles(fileList, directory = state.disk.path) {
   const files = Array.from(fileList || []);
   if (!files.length) return;
+  if (state.uploadRunning || state.matching) return showToast("请等待当前投递或匹配完成", "error");
   if (!state.status.browser?.connected || state.pickingBrowse || state.pickingDirectory || state.disk.loading || state.disk.error) return showToast("请先选择可访问的硬盘文件夹", "error");
+  const root = state.status.browseRoot;
+  if (state.autoClassify) {
+    state.matching = true;
+    updateDeliveryTarget();
+    renderQueue();
+    try { await loadLibrary(); }
+    finally { state.matching = false; updateDeliveryTarget(); }
+    if (root !== state.status.browseRoot) return showToast("浏览位置已变化，请重新加入文件", "error");
+  }
   for (const file of files) {
-    state.pending.push({ id: crypto.randomUUID(), file, directory, browseRoot: state.status.browseRoot, progress: 0, status: "待投递", failed: false });
+    const item = { id: crypto.randomUUID(), file, directory, defaultDirectory: directory, browseRoot: state.status.browseRoot, progress: 0, status: "待投递", failed: false, manual: false, matchKind: "current", matchReason: "投递到加入队列时的文件夹" };
+    if (state.autoClassify) classifyItem(item);
+    state.pending.push(item);
   }
   state.view = "disk";
+  state.queuePage = 0;
   updateCurrentSection();
+  updateDeliveryTarget();
   renderQueue();
   $("#uploadPanel").scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+async function rematchPending() {
+  if (state.uploadRunning || state.matching || !state.status.browser?.connected) return;
+  const root = state.status.browseRoot;
+  state.autoClassify = true;
+  $("#autoClassify").checked = true;
+  state.matching = true;
+  updateDeliveryTarget();
+  renderQueue();
+  try {
+    await loadLibrary();
+    if (root !== state.status.browseRoot) return;
+    for (const item of state.pending) {
+      if (item.browseRoot !== root || item.manual) continue;
+      classifyItem(item);
+      item.status = "待投递";
+      item.failed = false;
+    }
+    const first = state.pending.findIndex((item) => item.directory === null);
+    state.queuePage = first < 0 ? 0 : Math.floor(first / 30);
+    showToast(state.library.error || "已按最新栏目重新匹配；手动选择的目标已保留", state.library.error ? "error" : "success");
+  } finally {
+    state.matching = false;
+    updateDeliveryTarget();
+    renderQueue();
+  }
 }
 
 function renderQueue() {
   const queue = $("#uploadQueue");
   queue.hidden = state.pending.length === 0;
-  if (!state.pending.length) return;
-  const visibleItems = state.pending.slice(0, 30);
+  $("#rematchFiles").disabled = !state.status.browser?.connected || state.uploadRunning || state.matching || !state.pending.length;
+  if (!state.pending.length) { queue.replaceChildren(); return; }
+  const unresolved = state.pending.filter((item) => item.directory === null).length;
+  const pages = Math.ceil(state.pending.length / 30);
+  state.queuePage = Math.max(0, Math.min(state.queuePage, pages - 1));
+  const visibleItems = state.pending.slice(state.queuePage * 30, (state.queuePage + 1) * 30);
+  const busy = state.uploadRunning || state.matching;
   queue.innerHTML = visibleItems.map((item) => {
     const [label, typeClass] = fileType(item.file.name);
-    return `<div class="queue-item" data-queue-id="${item.id}">
+    return `<div class="queue-item ${item.directory === null ? "needs-target" : ""}" data-queue-id="${item.id}">
       <div class="queue-file"><span class="file-type-icon ${typeClass}">${escapeHTML(label)}</span><span class="queue-file-copy"><strong title="${escapeHTML(item.file.name)}">${escapeHTML(item.file.name)}</strong><small>${escapeHTML(formatSize(item.file.size))}${item.file.webkitRelativePath ? ` · ${escapeHTML(item.file.webkitRelativePath)}` : ""}</small></span></div>
-      <select aria-label="${escapeHTML(item.file.name)} 的目标文件夹" data-queue-directory="${item.id}" ${state.uploadRunning || item.browseRoot !== state.status.browseRoot ? "disabled" : ""}>${folderOptions(item)}</select>
-      <button class="queue-remove" type="button" data-remove-queue="${item.id}" aria-label="移除文件" ${state.uploadRunning ? "disabled" : ""}>×</button>
+      <select aria-label="${escapeHTML(item.file.name)} 的目标文件夹" data-queue-directory="${item.id}" ${busy || item.browseRoot !== state.status.browseRoot ? "disabled" : ""}>${folderOptions(item)}</select>
+      <button class="queue-remove" type="button" data-remove-queue="${item.id}" aria-label="移除文件" ${busy ? "disabled" : ""}>×</button>
+      <div class="queue-match ${item.directory === null ? "queue-warning" : ""}">${escapeHTML(item.matchReason)}</div>
       ${item.status === "正在复制" ? `<div class="queue-progress"><span style="width:${item.progress}%"></span></div>` : ""}
       ${item.status !== "待投递" ? `<div class="queue-status ${item.failed ? "queue-error" : ""}">${escapeHTML(item.status)}</div>` : ""}
     </div>`;
-  }).join("") + `<div class="queue-actions"><span>${state.pending.length} 个待投递文件${state.pending.length > visibleItems.length ? ` · 当前显示前 ${visibleItems.length} 个` : ""}</span><button type="button" id="uploadNow" ${state.uploadRunning ? "disabled" : ""}>${state.uploadRunning ? "正在投递…" : "开始投递"}</button></div>`;
+  }).join("") + (pages > 1 ? `<div class="list-pagination"><span>共 ${state.pending.length} 个文件</span><div><button type="button" data-queue-page="prev" ${state.queuePage === 0 ? "disabled" : ""}>上一页</button><span>${state.queuePage + 1} / ${pages}</span><button type="button" data-queue-page="next" ${state.queuePage + 1 >= pages ? "disabled" : ""}>下一页</button></div></div>` : "") + `<div class="queue-actions"><span role="status">${state.pending.length} 个待投递文件 · ${unresolved ? `${unresolved} 个待选择目标` : "目标已全部确认"}</span>${unresolved ? '<button type="button" data-find-unresolved>查看待选择</button>' : ""}<button type="button" id="uploadNow" ${busy || unresolved ? "disabled" : ""}>${state.uploadRunning ? "正在投递…" : "开始投递"}</button></div>`;
 }
 
 function updateQueueItem(item, { status = item.status, progress = item.progress, failed = item.failed } = {}) {
@@ -493,7 +562,8 @@ function archiveFile(item) {
 }
 
 async function uploadPending() {
-  if (state.uploadRunning || !state.pending.length) return;
+  if (state.uploadRunning || state.matching || !state.pending.length) return;
+  if (state.pending.some((item) => item.directory === null)) return showToast("请先为未匹配或有多个匹配的文件选择目标文件夹", "error");
   if (!state.status.browser?.connected) {
     showToast("请先连接硬盘并选择投递位置", "error", 5000);
     chooseBrowseLocation();
@@ -517,7 +587,7 @@ async function uploadPending() {
 
 async function showPathDialog() {
   if (state.pickingDirectory || state.pickingBrowse) return;
-  if (state.uploadRunning || state.scanRunning) return showToast("请等待当前文件整理或扫描完成", "error");
+  if (state.uploadRunning || state.scanRunning || state.matching) return showToast("请等待当前文件整理或扫描完成", "error");
   state.pickingDirectory = true;
   updateConnection();
   try {
@@ -542,7 +612,7 @@ async function showPathDialog() {
 
 async function chooseBrowseLocation(useArchive = false) {
   if (state.pickingDirectory || state.pickingBrowse) return;
-  if (state.uploadRunning || state.scanRunning) return showToast("请等待当前文件整理或扫描完成", "error");
+  if (state.uploadRunning || state.scanRunning || state.matching) return showToast("请等待当前文件整理或扫描完成", "error");
   state.pickingBrowse = true;
   updateConnection();
   renderDiskBrowser();
@@ -708,17 +778,49 @@ function setupEvents() {
   $("#bannerClose").addEventListener("click", () => { $("#connectionBanner").classList.add("hidden"); sessionStorage.setItem("bannerDismissed", "1"); });
   $("#scanButton").addEventListener("click", () => scanArchive());
   $("#helpButton").addEventListener("click", () => $("#helpDialog").showModal());
+  $("#autoClassify").addEventListener("change", (event) => {
+    if (state.uploadRunning || state.matching) return;
+    state.autoClassify = event.target.checked;
+    if (state.autoClassify) return rematchPending();
+    for (const item of state.pending) {
+      if (item.manual || item.browseRoot !== state.status.browseRoot) continue;
+      item.directory = item.defaultDirectory;
+      item.matchKind = "current";
+      item.matchReason = "投递到加入队列时的文件夹";
+      item.status = "待投递";
+      item.failed = false;
+    }
+    updateDeliveryTarget();
+    renderQueue();
+  });
+  $("#rematchFiles").addEventListener("click", rematchPending);
   $("#uploadQueue").addEventListener("change", (event) => {
     const select = event.target.closest("[data-queue-directory]");
     if (!select) return;
     const item = state.pending.find((entry) => entry.id === select.dataset.queueDirectory);
-    if (item && !state.uploadRunning && item.browseRoot === state.status.browseRoot) item.directory = select.value;
+    if (item && !state.uploadRunning && !state.matching && item.browseRoot === state.status.browseRoot) {
+      item.directory = select.value;
+      item.manual = true;
+      item.matchKind = "manual";
+      item.matchReason = "手动选择的目标";
+      item.status = "待投递";
+      item.failed = false;
+      renderQueue();
+    }
   });
   $("#uploadQueue").addEventListener("click", (event) => {
     const remove = event.target.closest("[data-remove-queue]");
-    if (remove && !state.uploadRunning) {
+    if (remove && !state.uploadRunning && !state.matching) {
       state.pending = state.pending.filter((item) => item.id !== remove.dataset.removeQueue);
       renderQueue();
+      return;
+    }
+    const page = event.target.closest("[data-queue-page]");
+    if (page) { state.queuePage += page.dataset.queuePage === "next" ? 1 : -1; renderQueue(); return; }
+    if (event.target.closest("[data-find-unresolved]")) {
+      state.queuePage = Math.floor(state.pending.findIndex((item) => item.directory === null) / 30);
+      renderQueue();
+      $(".needs-target select")?.focus();
       return;
     }
     if (event.target.closest("#uploadNow")) uploadPending();
