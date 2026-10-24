@@ -89,9 +89,9 @@
             <div class="disk-toolbar"><div><h2>硬盘文件</h2><p id="diskRootLabel">选择要查看的硬盘或文件夹</p></div><div class="disk-toolbar-actions"><button class="subtle-button" id="chooseBrowseButton" type="button">选择浏览位置</button><button class="subtle-button" id="browseArchiveButton" type="button" hidden>查看归档目录</button><button class="subtle-button" id="diskRefresh" type="button">刷新</button><button class="primary-button" id="newFolderButton" type="button">＋ 新建文件夹</button></div></div>
             <nav class="disk-breadcrumbs" id="diskBreadcrumbs" aria-label="硬盘文件夹路径"></nav>
           <section class="upload-panel" id="uploadPanel">
-            <div class="upload-heading"><div><h2>文件投递与自动分类</h2><p id="deliveryTarget">先从左侧选择文件夹栏目</p></div><span class="upload-badge"><span class="sparkle">✦</span> 按名称分类</span></div>
-            <div class="classification-controls"><label><input type="checkbox" id="autoClassify" checked /> 按文件名自动分类</label><button type="button" class="subtle-button" id="rematchFiles" disabled>重新自动匹配</button></div>
-            <p class="classification-hint">匹配所选硬盘或目录下的一级文件夹名称，例如“数学_作业.pdf” → “数学资料”。多个匹配或无匹配时，请手动选择目标。</p>
+            <div class="upload-heading"><div><h2>文件投递与自动分类</h2><p id="deliveryTarget">先从左侧选择文件夹栏目</p></div><span class="upload-badge"><span class="sparkle">✦</span> 智能识别</span></div>
+            <div class="classification-controls"><label><input type="checkbox" id="autoClassify" checked /> 智能识别文件名并分类</label><button type="button" class="subtle-button" id="rematchFiles" disabled>重新自动匹配</button></div>
+            <p class="classification-hint">识别简称、中英文别名、词序变化及少量错字，例如“高数复习.pdf” → “高等数学资料”、“English作业.docx” → “英语课件”。请核对目标；多个匹配或无可靠匹配时手动选择。</p>
             <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="选择或拖入文件投递">
               <input type="file" id="fileInput" multiple hidden />
               <input type="file" id="folderInput" webkitdirectory directory multiple hidden />
@@ -106,13 +106,24 @@
             <div class="disk-list" id="diskList" aria-live="polite"></div>
             <p class="disk-note">左侧栏目来自所选目录中的文件夹；选择栏目后可向对应文件夹投递文件。新增栏目会创建同名文件夹。</p>
           </section>
-          <footer class="page-footer"><span>课夹 <span class="footer-dot">·</span> 为学习资料留一份秩序</span><span><span class="privacy-icon">◇</span> 文件保存在你的移动硬盘</span></footer>
+          <footer class="page-footer"><span>课夹 1.5.0 <span class="footer-dot">·</span> 为学习资料留一份秩序</span><span><span class="privacy-icon">◇</span> 文件保存在你的移动硬盘</span></footer>
         </div>
       </main>
     </div>
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+    <dialog class="path-dialog" id="locationDialog" aria-labelledby="locationTitle"><form id="locationForm">
+      <button class="dialog-close" type="button" id="locationClose" aria-label="关闭">×</button>
+      <div class="dialog-icon">▣</div><h2 id="locationTitle">选择存储与浏览位置</h2>
+      <p class="path-intro">选择移动硬盘或文件夹。保存后读取当前目录，扫描索引可稍后手动开始。</p>
+      <label class="path-label" for="locationInput">文件夹完整路径</label>
+      <input id="locationInput" autocomplete="off" spellcheck="false" placeholder="例如 E:\学习资料" required />
+      <div class="location-native"><button class="subtle-button" type="button" id="nativeLocationButton">打开系统选择窗口…</button></div>
+      <small class="path-hint" id="nativePickerStatus" role="status">可直接粘贴完整路径。</small>
+      <div class="path-error" id="locationError" role="alert" hidden></div>
+      <div class="path-dialog-actions"><button class="subtle-button" type="button" id="locationCancel">取消</button><button class="dialog-primary" type="submit" id="saveLocationButton">保存位置</button></div>
+    </form></dialog>
     <dialog class="path-dialog" id="nameDialog" aria-labelledby="nameDialogTitle"><form id="nameForm"><button class="dialog-close" type="button" id="nameDialogClose" aria-label="关闭">×</button><div class="dialog-icon">✎</div><h2 id="nameDialogTitle">新建文件夹</h2><p class="path-intro" id="nameContext"></p><label class="path-label" for="entryNameInput">名称</label><input id="entryNameInput" autocomplete="off" maxlength="255" required /><small class="path-hint" id="nameHint"></small><div class="path-error" id="nameError" hidden></div><div class="path-dialog-actions"><button class="subtle-button" type="button" id="nameCancel">取消</button><button class="dialog-primary" type="submit" id="saveEntryName">保存</button></div></form></dialog>
-    <dialog class="help-dialog" id="helpDialog"><form method="dialog"><button class="dialog-close" aria-label="关闭">×</button><div class="dialog-icon">?</div><h2>课夹怎么使用</h2><ol><li>点“选择浏览位置”，在 Windows 系统窗口中选择移动硬盘或目录。</li><li>左侧资料库自动显示所选目录中的文件夹，鼠标滚轮可以滚动栏目。</li><li>拖入或选择文件后，按文件名自动匹配资料库栏目；确认或手动调整目标，再点“开始投递”。关闭自动分类则投递到当前文件夹；资料库旁的“＋”可新增栏目并创建同名文件夹。</li><li>点“定位”在文件资源管理器显示文件；侧栏“百度网盘”可打开网盘网页。</li></ol><p class="dialog-note">硬盘拔下后，归档索引仍保留；浏览、修改或整理文件需要重新连接。百度网盘入口打开网页，备份文件需在网盘中上传。</p><button class="dialog-primary">知道了</button></form></dialog>
+    <dialog class="help-dialog" id="helpDialog"><form method="dialog"><button class="dialog-close" aria-label="关闭">×</button><div class="dialog-icon">?</div><h2>课夹怎么使用</h2><ol><li>点“选择浏览位置”，粘贴移动硬盘或目录的完整路径，也可打开系统窗口选择。</li><li>左侧资料库自动显示所选目录中的文件夹，鼠标滚轮可以滚动栏目。</li><li>拖入或选择文件后，按文件名自动匹配资料库栏目；确认或手动调整目标，再点“开始投递”。关闭自动分类则投递到当前文件夹；资料库旁的“＋”可新增栏目并创建同名文件夹。</li><li>点“定位”在文件资源管理器显示文件；侧栏“百度网盘”可打开网盘网页。</li></ol><p class="dialog-note">硬盘拔下后，归档索引仍保留；浏览、修改或整理文件需要重新连接。百度网盘入口打开网页，备份文件需在网盘中上传。</p><button class="dialog-primary">知道了</button></form></dialog>
   </body>
 </html>

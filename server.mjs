@@ -387,38 +387,35 @@ async function handle(req, res) {
     json(res, 200, { browseRoot: drive.browseRoot, folders: await listDiskFolders(drive.browseRoot) });
     return;
   }
-  if (req.method === "POST" && url.pathname === "/api/choose-drive-path") {
+  if (req.method === "POST" && url.pathname === "/api/pick-directory") {
     if (!isLocalOrigin(req)) return json(res, 403, { error: "请求来源无效" });
-    if (pickerOpen || scanning || diskMutation) return json(res, 409, { error: "正在选择、整理或扫描文件，请稍后再试" });
+    const body = await writeJsonBody(req);
+    if (pickerOpen) return json(res, 409, { error: "系统选择窗口已打开，请先完成或取消" });
     pickerOpen = true;
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    res.once("close", cancel);
     try {
-      const drive = await driveStatus();
-      const selected = await chooseNativeDirectory(drive.connected ? drive.path : "");
-      if (!selected) return json(res, 200, { cancelled: true });
-      const directory = await withDiskMutation(() => saveArchiveDirectory(selected));
-      json(res, 200, { ok: true, drivePath: directory });
-    } finally { pickerOpen = false; }
+      const selected = await chooseNativeDirectory(body.kind === "archive" ? "请选择归档文件夹" : "请选择要查看的硬盘或文件夹", { signal: controller.signal });
+      if (!res.destroyed) json(res, 200, selected ? { path: selected } : { cancelled: true });
+    } finally {
+      res.removeListener("close", cancel);
+      pickerOpen = false;
+    }
     return;
   }
-  if (req.method === "POST" && ["/api/choose-browse-path", "/api/browse-archive"].includes(url.pathname)) {
+  if (req.method === "POST" && ["/api/drive-path", "/api/browse-path", "/api/browse-archive"].includes(url.pathname)) {
     if (!isLocalOrigin(req)) return json(res, 403, { error: "请求来源无效" });
-    if (pickerOpen || scanning || diskMutation) return json(res, 409, { error: "正在选择、整理或扫描文件，请稍后再试" });
-    pickerOpen = true;
-    try {
-      let selected;
-      if (url.pathname === "/api/browse-archive") selected = (await connectedArchive()).path;
-      else {
-        const browser = await browseStatus();
-        selected = await chooseNativeDirectory(browser.connected ? browser.path : "", "请选择要查看的硬盘或文件夹");
-        if (!selected) return json(res, 200, { cancelled: true });
-      }
-      const directory = await withDiskMutation(async () => {
-        const browsePath = await validateBrowseDirectory(selected);
-        await saveSettings({ ...await readSettings(), browsePath });
-        return browsePath;
-      });
-      json(res, 200, { ok: true, browseRoot: directory });
-    } finally { pickerOpen = false; }
+    const body = await writeJsonBody(req);
+    const archive = url.pathname === "/api/drive-path";
+    const directory = await withDiskMutation(async () => {
+      if (archive) return saveArchiveDirectory(body.path);
+      const selected = url.pathname === "/api/browse-archive" ? (await connectedArchive()).path : body.path;
+      const browsePath = await validateBrowseDirectory(selected);
+      await saveSettings({ ...await readSettings(), browsePath });
+      return browsePath;
+    });
+    json(res, 200, { ok: true, ...(archive ? { drivePath: directory } : { browseRoot: directory }) });
     return;
   }
   if (req.method === "POST" && ["/api/disk/folder", "/api/disk/rename", "/api/disk/reveal"].includes(url.pathname)) {
@@ -521,13 +518,6 @@ async function handle(req, res) {
         json(res, Number(error.status) || 500, { error: `文件已复制到硬盘，但索引更新失败。请点击“扫描归档目录”重新读取。${error.message ? `（${error.message}）` : ""}` });
       }
     });
-    return;
-  }
-  if (req.method === "POST" && url.pathname === "/api/drive-path") {
-    if (!isLocalOrigin(req)) return json(res, 403, { error: "请求来源无效" });
-    const body = await writeJsonBody(req);
-    const normalized = await withDiskMutation(() => saveArchiveDirectory(body.path));
-    json(res, 200, { ok: true, drivePath: normalized });
     return;
   }
   if (req.method === "POST" && url.pathname === "/api/scan") {

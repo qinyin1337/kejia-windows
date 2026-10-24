@@ -56,3 +56,45 @@ test("only basename participates, keeping imported directory names out", () => {
   assert.equal(matchFilename("数学/通知.pdf", folders("数学")).directory, null);
   assert.equal(matchFilename("数学\\通知.pdf", folders("数学")).directory, null);
 });
+
+test("recognizes course abbreviations and Chinese / English aliases", () => {
+  for (const [filename, name] of [
+    ["高数复习.pdf", "高等数学资料"], ["线代习题.pdf", "线性代数"],
+    ["English作业.docx", "英语课件"], ["linear_algebra习题.pdf", "线性代数"],
+    ["高等数学讲义.pdf", "高数"], ["AI导论.pdf", "人工智能"],
+    ["电脑基础.txt", "计算机资料"], ["web design练习.pdf", "网页设计"]
+  ]) assert.equal(matchFilename(filename, folders(name)).directory, name, filename);
+  assert.equal(matchFilename("高数复习.pdf", folders("数学", "高等数学资料")).directory, "高等数学资料");
+  assert.equal(matchFilename("高等数学讲义.pdf", folders("数学", "高数")).directory, "高数");
+});
+
+test("recognizes reordered topic words and one typo in a longer topic", () => {
+  assert.equal(matchFilename("工程软件复习.pdf", folders("软件工程资料")).directory, "软件工程资料");
+  assert.equal(matchFilename("软件工桯讲义.pdf", folders("软件工程资料")).directory, "软件工程资料");
+  assert.equal(matchFilename("Softwrae Engineering笔记.pdf", folders("Software Engineering")).directory, "Software Engineering");
+  assert.equal(matchFilename("专题2025.pdf", folders("专题2026")).kind, "unmatched");
+  assert.equal(matchFilename("数学.pdf", folders("化学")).kind, "unmatched");
+  assert.equal(matchFilename("软件工程.pdf", folders("软件工程", "软件工桯")).directory, "软件工程");
+});
+
+test("semantic ambiguity still requires a choice, even with one literal match", () => {
+  for (const [filename, library] of [
+    ["数学English合集.zip", folders("数学", "英语")],
+    ["高数作业.pdf", folders("高等数学资料", "高数讲义")],
+    ["软件工桯.pdf", folders("软件工程", "软件工呈")]
+  ]) assert.equal(matchFilename(filename, library).kind, "ambiguous", filename);
+  assert.equal(matchFilename("英语.pdf", folders("数学英语合集")).kind, "unmatched");
+});
+
+test("document synonyms are fallback destinations; subjects take priority", () => {
+  assert.equal(matchFilename("employment_agreement.pdf", folders("合同资料")).directory, "合同资料");
+  assert.equal(matchFilename("English_homework.docx", folders("作业报告", "英语课件")).directory, "英语课件");
+  assert.equal(matchFilename("化学试卷.pdf", folders("考试资料")).directory, "考试资料");
+  assert.equal(matchFilename("通知.pdf", folders("考试资料", "英语")).kind, "unmatched");
+});
+
+test("aliases respect Latin word boundaries and ignore extensions and parent names", () => {
+  for (const name of ["chair.pdf", "email.pdf", "microbiology.pdf", "英语/通知.pdf", "通知.english"]) {
+    assert.equal(matchFilename(name, folders("人工智能", "英语", "生物")).kind, "unmatched", name);
+  }
+});

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { access, lstat, mkdir, readdir, realpath, rename } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
@@ -119,44 +120,34 @@ export async function renameDiskEntry(root, relative, name, archiveDirectory) {
   return { from: source.target, to: destination };
 }
 
-export const WINDOWS_FOLDER_PICKER_SCRIPT = `
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.Application]::EnableVisualStyles()
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$owner = New-Object System.Windows.Forms.Form
-try {
-  $dialog.Description = $env:COURSE_ARCHIVE_PICKER_DESCRIPTION
-  $dialog.ShowNewFolderButton = $true
-  $dialog.RootFolder = [System.Environment+SpecialFolder]::MyComputer
-  if ($env:COURSE_ARCHIVE_PICKER_START) { $dialog.SelectedPath = $env:COURSE_ARCHIVE_PICKER_START }
-  $owner.TopMost = $true
-  $owner.ShowInTaskbar = $false
-  $owner.Opacity = 0
-  $owner.Size = New-Object System.Drawing.Size(1, 1)
-  $owner.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-  $owner.Show()
-  $owner.Activate()
-  if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
-    [Console]::Write($dialog.SelectedPath)
-  }
-} finally { $dialog.Dispose(); $owner.Dispose() }
-`;
+export const WINDOWS_FOLDER_PICKER_SCRIPT = readFileSync(new URL("./windows-folder-picker.ps1", import.meta.url), "utf8");
 
-export async function chooseNativeDirectory(initialPath = "", description = "请选择移动硬盘或硬盘中的归档文件夹") {
-  if (process.platform !== "win32") throw fail("请在 Windows 电脑运行课夹，才能打开 Windows 系统文件夹选择窗口", 501);
-  const command = "powershell.exe";
-  const args = ["-NoProfile", "-STA", "-EncodedCommand", Buffer.from(WINDOWS_FOLDER_PICKER_SCRIPT, "utf16le").toString("base64")];
+export async function chooseNativeDirectory(description = "请选择移动硬盘或归档文件夹", { signal, spawnProcess = spawn, platform = process.platform, timeoutMs = 300000 } = {}) {
+  if (platform !== "win32") throw fail("系统选择窗口需要 Windows；请在页面中直接粘贴文件夹路径", 501);
+  if (signal?.aborted) throw fail("已取消选择文件夹", 499);
+  const args = ["-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", Buffer.from(WINDOWS_FOLDER_PICKER_SCRIPT, "utf16le").toString("base64")];
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { windowsHide: true, env: { ...process.env, COURSE_ARCHIVE_PICKER_START: initialPath, COURSE_ARCHIVE_PICKER_DESCRIPTION: description }, stdio: ["ignore", "pipe", "pipe"] });
-    let output = "";
-    let errors = "";
+    const child = spawnProcess("powershell.exe", args, { windowsHide: true, env: { ...process.env, COURSE_ARCHIVE_PICKER_DESCRIPTION: description }, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "", errors = "", settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
+      if (error) reject(error); else resolve(value);
+    };
+    const cancel = () => { child.kill(); finish(fail("已取消选择文件夹", 499)); };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(fail("系统选择窗口等待超时，请直接粘贴文件夹路径", 504));
+    }, timeoutMs);
+    signal?.addEventListener("abort", cancel, { once: true });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (part) => { output += part; });
     child.stderr.on("data", (part) => { errors += part; });
-    child.on("error", () => reject(fail("无法打开系统文件夹选择窗口，请确认本机服务可调用系统组件", 500)));
-    child.on("close", (code) => code === 0 ? resolve(output.trim()) : reject(fail(`系统选择窗口未完成：${errors.trim() || "请重试"}`, 500)));
+    child.on("error", () => finish(fail("无法打开系统选择窗口，请直接粘贴文件夹路径", 500)));
+    child.on("close", (code) => code === 0 ? finish(null, output.trim()) : finish(fail(`系统选择窗口未完成：${errors.trim() || "请直接粘贴文件夹路径"}`, 500)));
+    if (signal?.aborted) cancel();
   });
 }

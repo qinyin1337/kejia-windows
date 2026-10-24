@@ -1,4 +1,4 @@
-import { matchFilename } from "./filename-classifier.js";
+import { createFilenameClassifier } from "./filename-classifier.js";
 
 const CATEGORY_NAMES = {
   courses: "课程资料",
@@ -26,7 +26,10 @@ const state = {
   disk: { path: "", query: "", page: 0, data: null, loading: false, error: "", requestId: 0 },
   pickingDirectory: false,
   pickingBrowse: false,
-  nameOperation: null
+  nameOperation: null,
+  locationKind: "browse",
+  nativePicker: null,
+  savingLocation: false
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -399,7 +402,7 @@ function updateDeliveryTarget() {
   const ready = state.status.browser?.connected && !state.disk.loading && !state.disk.error && !state.pickingBrowse && !state.pickingDirectory;
   const separator = state.status.platform === "win32" ? "\\" : "/";
   const root = (state.status.browseRoot || "").replace(/[\\/]$/, "");
-  $("#deliveryTarget").textContent = ready ? state.autoClassify ? "按文件名匹配左侧资料库栏目，确认去向后开始投递" : `投递到：${root}${separator}${state.disk.path.split("/").join(separator)}` : "先选择硬盘或目录";
+  $("#deliveryTarget").textContent = ready ? state.autoClassify ? "智能识别文件主题并匹配资料库栏目，确认去向后开始投递" : `投递到：${root}${separator}${state.disk.path.split("/").join(separator)}` : "先选择硬盘或目录";
   $("#autoClassify").disabled = state.uploadRunning || state.matching;
   $("#rematchFiles").disabled = !ready || state.uploadRunning || state.matching || !state.pending.length;
   $("#rematchFiles").textContent = state.matching ? "正在匹配…" : "重新自动匹配";
@@ -416,14 +419,14 @@ function folderOptions(item) {
   return `<option value="" disabled ${item.directory === null ? "selected" : ""}>请选择目标文件夹</option>` + [...choices].map(([value, label]) => `<option value="${escapeHTML(value)}" ${value === item.directory ? "selected" : ""}>${escapeHTML(label)}</option>`).join("");
 }
 
-function classifyItem(item) {
+function classifyItem(item, classify) {
   if (state.library.error) {
     item.directory = null;
     item.matchReason = "无法读取资料库，请刷新后重新匹配或手动选择目标";
     item.matchKind = "unmatched";
     return;
   }
-  const match = matchFilename(item.file.name, state.library.folders);
+  const match = classify(item.file.name);
   item.directory = match.directory;
   item.matchReason = match.reason;
   item.matchKind = match.kind;
@@ -435,19 +438,23 @@ async function addFiles(fileList, directory = state.disk.path) {
   if (state.uploadRunning || state.matching) return showToast("请等待当前投递或匹配完成", "error");
   if (!state.status.browser?.connected || state.pickingBrowse || state.pickingDirectory || state.disk.loading || state.disk.error) return showToast("请先选择可访问的硬盘文件夹", "error");
   const root = state.status.browseRoot;
-  if (state.autoClassify) {
-    state.matching = true;
-    updateDeliveryTarget();
-    renderQueue();
-    try { await loadLibrary(); }
-    finally { state.matching = false; updateDeliveryTarget(); }
+  state.matching = true;
+  updateDeliveryTarget();
+  renderQueue();
+  try {
+    if (state.autoClassify) await loadLibrary();
     if (root !== state.status.browseRoot) return showToast("浏览位置已变化，请重新加入文件", "error");
-  }
-  for (const file of files) {
-    const item = { id: crypto.randomUUID(), file, directory, defaultDirectory: directory, browseRoot: state.status.browseRoot, progress: 0, status: "待投递", failed: false, manual: false, matchKind: "current", matchReason: "投递到加入队列时的文件夹" };
-    if (state.autoClassify) classifyItem(item);
-    state.pending.push(item);
-  }
+    const classify = createFilenameClassifier(state.library.folders);
+    const added = [];
+    for (const file of files) {
+      const item = { id: crypto.randomUUID(), file, directory, defaultDirectory: directory, browseRoot: root, progress: 0, status: "待投递", failed: false, manual: false, matchKind: "current", matchReason: "投递到加入队列时的文件夹" };
+      if (state.autoClassify) classifyItem(item, classify);
+      added.push(item);
+      if (added.length % 25 === 0) await new Promise((resolve) => window.setTimeout(resolve, 0));
+    }
+    if (root !== state.status.browseRoot) return showToast("浏览位置已变化，请重新加入文件", "error");
+    for (const item of added) state.pending.push(item);
+  } finally { state.matching = false; updateDeliveryTarget(); renderQueue(); }
   state.view = "disk";
   state.queuePage = 0;
   updateCurrentSection();
@@ -467,9 +474,12 @@ async function rematchPending() {
   try {
     await loadLibrary();
     if (root !== state.status.browseRoot) return;
+    const classify = createFilenameClassifier(state.library.folders);
+    let processed = 0;
     for (const item of state.pending) {
       if (item.browseRoot !== root || item.manual) continue;
-      classifyItem(item);
+      classifyItem(item, classify);
+      if (++processed % 25 === 0) await new Promise((resolve) => window.setTimeout(resolve, 0));
       item.status = "待投递";
       item.failed = false;
     }
@@ -489,6 +499,7 @@ function renderQueue() {
   $("#rematchFiles").disabled = !state.status.browser?.connected || state.uploadRunning || state.matching || !state.pending.length;
   if (!state.pending.length) { queue.replaceChildren(); return; }
   const unresolved = state.pending.filter((item) => item.directory === null).length;
+  const differentRoot = state.pending.some((item) => item.browseRoot !== state.status.browseRoot);
   const pages = Math.ceil(state.pending.length / 30);
   state.queuePage = Math.max(0, Math.min(state.queuePage, pages - 1));
   const visibleItems = state.pending.slice(state.queuePage * 30, (state.queuePage + 1) * 30);
@@ -503,7 +514,7 @@ function renderQueue() {
       ${item.status === "正在复制" ? `<div class="queue-progress"><span style="width:${item.progress}%"></span></div>` : ""}
       ${item.status !== "待投递" ? `<div class="queue-status ${item.failed ? "queue-error" : ""}">${escapeHTML(item.status)}</div>` : ""}
     </div>`;
-  }).join("") + (pages > 1 ? `<div class="list-pagination"><span>共 ${state.pending.length} 个文件</span><div><button type="button" data-queue-page="prev" ${state.queuePage === 0 ? "disabled" : ""}>上一页</button><span>${state.queuePage + 1} / ${pages}</span><button type="button" data-queue-page="next" ${state.queuePage + 1 >= pages ? "disabled" : ""}>下一页</button></div></div>` : "") + `<div class="queue-actions"><span role="status">${state.pending.length} 个待投递文件 · ${unresolved ? `${unresolved} 个待选择目标` : "目标已全部确认"}</span>${unresolved ? '<button type="button" data-find-unresolved>查看待选择</button>' : ""}<button type="button" id="uploadNow" ${busy || unresolved ? "disabled" : ""}>${state.uploadRunning ? "正在投递…" : "开始投递"}</button></div>`;
+  }).join("") + (pages > 1 ? `<div class="list-pagination"><span>共 ${state.pending.length} 个文件</span><div><button type="button" data-queue-page="prev" ${state.queuePage === 0 ? "disabled" : ""}>上一页</button><span>${state.queuePage + 1} / ${pages}</span><button type="button" data-queue-page="next" ${state.queuePage + 1 >= pages ? "disabled" : ""}>下一页</button></div></div>` : "") + `<div class="queue-actions"><span role="status">${state.pending.length} 个待投递文件 · ${differentRoot ? "含原浏览位置的文件，请返回原位置或移除" : unresolved ? `${unresolved} 个待选择目标` : "目标已全部确认"}</span>${unresolved ? '<button type="button" data-find-unresolved>查看待选择</button>' : ""}<button type="button" id="uploadNow" ${busy || unresolved || differentRoot || !state.status.browser?.connected ? "disabled" : ""}>${state.uploadRunning ? "正在投递…" : "开始投递"}</button></div>`;
 }
 
 function updateQueueItem(item, { status = item.status, progress = item.progress, failed = item.failed } = {}) {
@@ -585,55 +596,103 @@ async function uploadPending() {
   await refresh();
 }
 
-async function showPathDialog() {
+function showPathDialog() { openLocationDialog("archive"); }
+
+function openLocationDialog(kind) {
   if (state.pickingDirectory || state.pickingBrowse) return;
   if (state.uploadRunning || state.scanRunning || state.matching) return showToast("请等待当前文件整理或扫描完成", "error");
-  state.pickingDirectory = true;
-  updateConnection();
+  state.locationKind = kind;
+  $("#locationTitle").textContent = kind === "archive" ? "设置归档位置" : "选择存储与浏览位置";
+  $("#locationInput").value = (kind === "archive" ? state.status.drivePath : state.status.browseRoot) || "";
+  $("#locationError").hidden = true;
+  $("#nativePickerStatus").textContent = "可粘贴资源管理器地址栏中的完整路径，无需等待系统窗口。";
+  $("#locationDialog").showModal();
+  $("#locationInput").focus();
+  $("#locationInput").select();
+}
+
+async function pickLocationNatively() {
+  if (state.nativePicker || state.savingLocation) return;
+  const controller = new AbortController();
+  state.nativePicker = controller;
+  $("#nativeLocationButton").disabled = true;
+  $("#nativePickerStatus").textContent = "正在打开系统窗口…也可以直接填写路径并保存，或关闭此窗口取消。";
+  $("#locationError").hidden = true;
   try {
-    const result = await apiRequest("/api/choose-drive-path", { method: "POST" });
-    if (result.cancelled) return;
-    state.disk.path = "";
-    state.disk.page = 0;
-    state.disk.query = "";
-    state.disk.data = null;
-    if (state.view === "disk") $("#searchInput").value = "";
-    await refresh();
-    showToast("归档位置已选择，正在读取已有文件…", "success");
-    await scanArchive({ quiet: true });
+    const result = await apiRequest("/api/pick-directory", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: state.locationKind }), signal: controller.signal
+    });
+    if (controller.signal.aborted || state.nativePicker !== controller) return;
+    if (!result.cancelled) $("#locationInput").value = result.path;
+    $("#nativePickerStatus").textContent = result.cancelled ? "已取消系统选择，可直接填写路径。" : "位置已填入，点击保存位置即可使用。";
   } catch (error) {
-    showToast(error.message || "无法打开系统选择窗口", "error", 6000);
+    if (!controller.signal.aborted) {
+      $("#locationError").textContent = error.message;
+      $("#locationError").hidden = false;
+    }
   } finally {
-    state.pickingDirectory = false;
-    updateConnection();
-    if (state.view === "disk") renderDiskBrowser();
+    if (state.nativePicker === controller) {
+      state.nativePicker = null;
+      $("#nativeLocationButton").disabled = false;
+    }
   }
 }
 
-async function chooseBrowseLocation(useArchive = false) {
-  if (state.pickingDirectory || state.pickingBrowse) return;
-  if (state.uploadRunning || state.scanRunning || state.matching) return showToast("请等待当前文件整理或扫描完成", "error");
-  state.pickingBrowse = true;
+function cancelNativePicker() {
+  state.nativePicker?.abort();
+  state.nativePicker = null;
+  $("#nativeLocationButton").disabled = false;
+}
+
+async function applyLocation(endpoint, body = {}) {
+  const archive = endpoint === "/api/drive-path";
+  state.pickingDirectory = archive;
+  state.pickingBrowse = !archive;
   updateConnection();
   renderDiskBrowser();
   try {
-    const result = await apiRequest(useArchive ? "/api/browse-archive" : "/api/choose-browse-path", { method: "POST" });
-    if (result.cancelled) return;
+    await apiRequest(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     state.disk.requestId += 1;
     state.disk.path = "";
     state.disk.page = 0;
     state.disk.query = "";
     state.disk.data = null;
     if (state.view === "disk") $("#searchInput").value = "";
+    if ($("#locationDialog").open) $("#locationDialog").close();
     await refresh();
-    showToast("浏览位置已切换", "success");
-  } catch (error) {
-    showToast(error.message || "无法选择浏览位置", "error", 6000);
+    showToast(archive ? "归档位置已保存；需要更新索引时点击扫描归档目录" : "存储与浏览位置已切换", "success");
   } finally {
+    state.pickingDirectory = false;
     state.pickingBrowse = false;
     updateConnection();
     if (state.view === "disk") renderDiskBrowser();
   }
+}
+
+async function saveLocation(event) {
+  event.preventDefault();
+  if (state.savingLocation) return;
+  state.savingLocation = true;
+  cancelNativePicker();
+  $("#saveLocationButton").disabled = true;
+  $("#locationError").hidden = true;
+  try {
+    await applyLocation(state.locationKind === "archive" ? "/api/drive-path" : "/api/browse-path", { path: $("#locationInput").value });
+  } catch (error) {
+    $("#locationError").textContent = error.message;
+    $("#locationError").hidden = false;
+  } finally {
+    state.savingLocation = false;
+    $("#saveLocationButton").disabled = false;
+  }
+}
+
+async function chooseBrowseLocation(useArchive = false) {
+  if (!useArchive) return openLocationDialog("browse");
+  if (state.pickingDirectory || state.pickingBrowse || state.uploadRunning || state.scanRunning || state.matching) return;
+  try { await applyLocation("/api/browse-archive"); }
+  catch (error) { showToast(error.message, "error"); }
 }
 
 async function scanArchive({ quiet = false } = {}) {
@@ -713,6 +772,10 @@ function setDate() {
 }
 
 function setupEvents() {
+  $("#locationForm").addEventListener("submit", saveLocation);
+  $("#nativeLocationButton").addEventListener("click", pickLocationNatively);
+  for (const id of ["locationClose", "locationCancel"]) $(`#${id}`).addEventListener("click", () => $("#locationDialog").close());
+  $("#locationDialog").addEventListener("close", cancelNativePicker);
   $("#chooseFiles").addEventListener("click", (event) => { event.stopPropagation(); $("#fileInput").click(); });
   $("#chooseFolder").addEventListener("click", (event) => { event.stopPropagation(); $("#folderInput").click(); });
   $("#fileInput").addEventListener("change", (event) => { addFiles(event.target.files); event.target.value = ""; });
@@ -835,4 +898,4 @@ setupEvents();
 setDate();
 refresh().catch(() => showToast("无法连接网站服务，请确认服务正在运行", "error"));
 
-window.setInterval(() => { if (!document.hidden && !state.uploadRunning && !state.pickingBrowse && !state.pickingDirectory && !$("#nameDialog").open) loadLibrary(); }, 15000);
+window.setInterval(() => { if (!document.hidden && !state.uploadRunning && !state.pickingBrowse && !state.pickingDirectory && !state.matching && !$("#locationDialog").open && !$("#nameDialog").open) loadLibrary(); }, 15000);

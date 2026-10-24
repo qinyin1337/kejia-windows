@@ -19,7 +19,7 @@ test("classified delivery writes correct content, preserves collisions and rejec
   await mkdir(path.join(drive, "数学资料"), { recursive: true });
   await mkdir(path.join(drive, "英语课件"));
   const source = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  for (const name of ["server.mjs", "disk-files.mjs", "public"]) await cp(path.join(source, name), path.join(app, name), { recursive: true });
+  for (const name of ["server.mjs", "disk-files.mjs", "windows-folder-picker.ps1", "public"]) await cp(path.join(source, name), path.join(app, name), { recursive: true });
   const child = spawn(process.execPath, [path.join(app, "server.mjs")], { env: { ...process.env, HOST: "127.0.0.1", PORT: "0", DRIVE_PATH: drive }, stdio: ["ignore", "pipe", "pipe"] });
   t.after(async () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
@@ -60,6 +60,31 @@ test("classified delivery writes correct content, preserves collisions and rejec
     assert.equal((await deliver("外部链接")).status, 403);
   }
   assert.deepEqual(await readdir(outside), []);
+  // Saving either location is immediate and never starts indexing implicitly.
+  const configure = (endpoint, selected, origin = base) => fetch(`${base}${endpoint}`, {
+    method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ path: selected })
+  });
+  assert.equal((await configure("/api/browse-path", outside, "https://example.invalid")).status, 403);
+  assert.equal((await configure("/api/browse-path", "relative/path")).status, 400);
+  assert.equal((await configure("/api/browse-path", path.join(temporary, "missing"))).status, 404);
+  assert.equal((await configure("/api/browse-path", outside)).status, 200);
+  let status = await (await fetch(`${base}/api/status`)).json();
+  assert.equal(status.browseRoot, outside);
+  assert.equal(status.drivePath, drive);
+  assert.equal((await configure("/api/drive-path", path.join(drive, "英语课件"))).status, 200);
+  status = await (await fetch(`${base}/api/status`)).json();
+  assert.equal(status.browseRoot, outside);
+  assert.equal(status.drivePath, path.join(drive, "英语课件"));
+  const scan = await (await fetch(`${base}/api/scan-status`)).json();
+  assert.equal(scan.running, false);
+  assert.equal(scan.startedAt, null);
+  assert.equal((await configure("/api/browse-archive")).status, 200);
+  status = await (await fetch(`${base}/api/status`)).json();
+  assert.equal(status.browseRoot, path.join(drive, "英语课件"));
+  if (process.platform !== "win32") {
+    assert.equal((await configure("/api/pick-directory")).status, 501);
+    assert.equal((await configure("/api/pick-directory")).status, 501); // failure releases picker lock
+  }
   const js = await fetch(`${base}/filename-classifier.js`);
   assert.equal(js.status, 200);
   assert.match(js.headers.get("content-type"), /javascript/);
